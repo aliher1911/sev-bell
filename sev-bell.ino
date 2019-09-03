@@ -7,7 +7,12 @@
  */
 #include <Servo.h>
 
-#define DEBUG_MSG(v) Serial.print(v)
+
+#ifdef DEBUG_LOG
+#define DEBUG_MSG(v) Serial.println(v)
+#else
+#define DEBUG_MSG(v)
+#endif
 
 const int SERIAL_SPEED = 9600;
 const int SERVO_PIN = 9;
@@ -46,6 +51,7 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   // commands from serial
   Serial.begin(SERIAL_SPEED);
+  DEBUG_MSG("Start!");
 }
 
 long nextUpdate = 0;
@@ -96,16 +102,17 @@ int pos = 0;
 void processSerial() {
   int inByte = Serial.read();
   if (inByte == '\n') {
+    DEBUG_MSG("Newline");
     if (pos != 0) {
       switch(buffer[0]) {
-        case 0:
+        case '0':
           break;
-        case 1:
+        case '1':
           if (pos==1) {
             startServo();
           }
           break;
-        case 2:          
+        case '2':
           changeServo();
           break;
       }
@@ -113,9 +120,11 @@ void processSerial() {
       pos=0;
     }
   } else {
+    DEBUG_MSG("Newchar");
     if (pos >= max_buffer) {
       // this is error, we should start from the beginning
       pos = 0;
+      DEBUG_MSG("Buffer overflow");
     } else {
       buffer[pos++] = inByte;
     }
@@ -134,6 +143,7 @@ const int comma1 = 3;
 const int comma2 = 7;
 void changeServo() {
   if (pos != max_buffer) {
+    DEBUG_MSG("Wrong message size");
     return;
   }
   if (buffer[colon] != ':' 
@@ -159,17 +169,16 @@ void changeServo() {
     DEBUG_MSG("Position out of range");
     return;
   }
-  sequence[index].pos = pos;
-  sequence[index].delay = delay;
-  
   DEBUG_MSG("New position");
   DEBUG_MSG(index);
   DEBUG_MSG(pos);
   DEBUG_MSG(delay);
+
+  sequence[index].pos = pos;
+  sequence[index].delay = delay;
 }
 
-template <typename T>
-bool parseTo(char* begin, char* end, T& val) {
+template <typename T> bool parseTo(char* begin, char* end, T& val) {
   long value = 0;
   while(begin != end) {
     value *= 10;
@@ -178,6 +187,7 @@ bool parseTo(char* begin, char* end, T& val) {
       return false;
     }
     value += (val - '0');
+    begin++;
   }
   val = value;
   return true;
