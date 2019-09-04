@@ -7,6 +7,7 @@
  */
 #include <Servo.h>
 
+//#define DEBUG_LOG
 
 #ifdef DEBUG_LOG
 #define DEBUG_MSG(v) Serial.println(v)
@@ -15,7 +16,7 @@
 #endif
 
 const int SERIAL_SPEED = 9600;
-const int SERVO_PIN = 9;
+const int SERVO_PIN = 5;
 
 const int sweepBackDelay = 300;
 const int low = 30;
