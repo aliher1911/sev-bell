@@ -7,18 +7,19 @@
  */
 #include <Servo.h>
 
-//#define DEBUG_LOG
+#define DEBUG_LOG
 
 #ifdef DEBUG_LOG
 #define DEBUG_MSG(v) Serial.println(v)
+#define DEBUG_MSG1(v) Serial.print(v)
 #else
 #define DEBUG_MSG(v)
+#define DEBUG_MSG1(v)
 #endif
 
 const int SERIAL_SPEED = 9600;
 const int SERVO_PIN = 5;
 
-const int sweepBackDelay = 300;
 const int low = 30;
 const int high = 135;
 const int mid = (high + low) / 2;
@@ -30,7 +31,7 @@ struct Stroke {
   long delay;
 };
 
-const int maxStrokes = 8;
+const int maxStrokes = 17;
 const int kEndOfList = -1;
 
 Stroke sequence[maxStrokes] = {
@@ -42,6 +43,15 @@ Stroke sequence[maxStrokes] = {
   {kEndOfList, 0},
   {kEndOfList, 0},
   {kEndOfList, 0},
+  {kEndOfList, 0},
+  {kEndOfList, 0},
+  {kEndOfList, 0},
+  {kEndOfList, 0},
+  {kEndOfList, 0},
+  {kEndOfList, 0},
+  {kEndOfList, 0},
+  {kEndOfList, 0},
+  {kEndOfList, 0}, // can't override that
 };
 
 void setup() {
@@ -52,19 +62,23 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   // commands from serial
   Serial.begin(SERIAL_SPEED);
-  DEBUG_MSG("Start!");
+  DEBUG_MSG(F("Start!"));
 }
 
+// time in millis when next servo angle is applied
 long nextUpdate = 0;
+// index of next servo move
+// 0 - maxStrokes, but maxStroke is never addressed
 size_t next = maxStrokes;
+// if true, next seq is requested while prev is in progress
 bool defer = false;
 void startServo() {
   if (next != maxStrokes) {
-    DEBUG_MSG("Defer action");
+    DEBUG_MSG(F("Defer action"));
     // prev run still active
     defer = true;
   } else {
-    DEBUG_MSG("Start action");
+    DEBUG_MSG(F("Start action"));
     next = 0;
     // set update 1 ms in the past to trigger first run
     nextUpdate = millis() - 1;
@@ -75,11 +89,11 @@ void startServo() {
 void refreshServo() {
   if (next != maxStrokes && nextUpdate < millis()) {
     if (sequence[next].pos == kEndOfList) {
-      DEBUG_MSG("Finished action");
+      DEBUG_MSG(F("Finished action"));
       // we reached end of list
       next = maxStrokes;
       if (defer) {
-        DEBUG_MSG("Start next deferred");
+        DEBUG_MSG(F("Start deferred sequence"));
         // bell was enqueued while ringing, restart
         defer = false;
         startServo(); 
@@ -87,7 +101,8 @@ void refreshServo() {
         digitalWrite(LED_BUILTIN, LOW);
       }
     } else {
-      DEBUG_MSG("Next step");
+      DEBUG_MSG1(F("Next step "));
+      DEBUG_MSG(next);
       nextUpdate += sequence[next].delay;
       myservo.write(sequence[next].pos);
       next++;
@@ -97,101 +112,127 @@ void refreshServo() {
   }
 }
 
-const int max_buffer = 13;
+void stopAction() {
+  DEBUG_MSG(F("Stop current action"));
+  next = maxStrokes;
+  defer = false;
+  myservo.write(mid);
+}
+
+const int max_buffer = 25;
 char buffer[max_buffer];
 int pos = 0;
 void processSerial() {
   int inByte = Serial.read();
-  if (inByte == '\n') {
-    DEBUG_MSG("Newline");
-    if (pos != 0) {
-      switch(buffer[0]) {
-        case '0':
-          break;
-        case '1':
-          if (pos==1) {
-            startServo();
-          }
-          break;
-        case '2':
-          changeServo();
-          break;
-      }
-      // reset command buffer
-      pos=0;
-    }
-  } else {
-    DEBUG_MSG("Newchar");
-    if (pos >= max_buffer) {
-      // this is error, we should start from the beginning
+  switch (inByte) {
+    case 0:
+      DEBUG_MSG(F("Reset frame"));
       pos = 0;
-      DEBUG_MSG("Buffer overflow");
-    } else {
-      buffer[pos++] = inByte;
-    }
+      break;
+    case '\n':
+    case '\r':
+      DEBUG_MSG(F("Newline"));
+      if (pos == max_buffer) {
+        // buffer reached limit so it was truncated so we should ignore
+        DEBUG_MSG(F("Buffer overflow"));
+        pos = 0;
+      }
+      if (pos != 0) {
+        switch(buffer[0]) {
+          case '0':
+            stopAction();
+            break;
+          case '1':
+            if (pos==1) {
+              startServo();
+            } else {
+              DEBUG_MSG(F("Start servo cmd has unrecognised payload"));
+            }
+            break;
+          case '2':
+            changeServo();
+            break;
+        }
+        // reset command buffer
+        pos=0;
+      }
+      break;
+    default:
+      DEBUG_MSG(F("Newchar"));
+      if (pos < max_buffer) {
+        buffer[pos++] = inByte;
+      }
   }
 }
 
-// max message size:
-// 0123456789012
-// 2:0,000,00000
-// 2:<index>,<pos>,<delay>
-// index - [0, 7] index of step to change
-// pos - [0, 180] angle encoded as 3 digits always
-// delay - [0, 60000] milliseconds (1 minute max) as 5 digits
+// Message format
+// 2:<index>,<angle>,<delay>
+// index - [0, 15] index of step to change
+// pos - [0, 180] angle
+// delay - [0, 60000] milliseconds (1 minute max)
 const int colon = 1;
-const int comma1 = 3;
-const int comma2 = 7;
 void changeServo() {
   if (pos != max_buffer) {
-    DEBUG_MSG("Wrong message size");
+    DEBUG_MSG(F("Wrong message size"));
     return;
   }
-  if (buffer[colon] != ':' 
-      || buffer[comma1] != ','
-      || buffer[comma2] != ',') {
-    DEBUG_MSG("Failed to parse delimiters");
+  if (buffer[colon] != ':') {
+    DEBUG_MSG(F("Failed to parse delimiters"));
     return;
   }
   int index;
-  int pos;
+  int angle;
   long delay;
-  if (!parseTo(buffer+colon+1, buffer+comma1, index)
-      || !parseTo(buffer+comma1+1, buffer+comma2, pos)
-      || !parseTo(buffer+comma2+1, buffer+max_buffer, delay)) {
-    DEBUG_MSG("Failed to parse digits");
+  auto next = buffer + colon;
+  auto end = buffer + pos;
+  next = parseTo(next + 1, end, index);
+  if (next == end || *next != ',') {
+    DEBUG_MSG(F("Failed to parse: no first comma"));
     return;
   }
-  if (index > 7) {
-    DEBUG_MSG("Index out of range");
+  next = parseTo(next + 1, end, angle);
+  if (next == end || *next != ',') {
+    DEBUG_MSG(F("Failed to parse: no second comma"));
     return;
   }
-  if (pos > 180) {
-    DEBUG_MSG("Position out of range");
+  next = parseTo(next + 1, end, delay);
+  if (next != end) {
+    DEBUG_MSG(F("Failed to parse: extra chars"));
     return;
   }
-  DEBUG_MSG("New position");
-  DEBUG_MSG(index);
-  DEBUG_MSG(pos);
+  // -1 because we reserve last entry as terminator
+  if (index >= maxStrokes-1) {
+    DEBUG_MSG(F("Validation: Index out of range"));
+    return;
+  }
+  if (angle > 180) {
+    DEBUG_MSG(F("Validation: Angle out of range"));
+    return;
+  }
+  DEBUG_MSG1(F("New position: "));
+  DEBUG_MSG1(index);
+  DEBUG_MSG1(angle);
   DEBUG_MSG(delay);
 
-  sequence[index].pos = pos;
+  sequence[index].pos = angle;
   sequence[index].delay = delay;
 }
 
-template <typename T> bool parseTo(char* begin, char* end, T& val) {
+// return first non digit entry or end of string
+template <typename T> char* parseTo(char* begin, char* end, T& val) {
   long value = 0;
   while(begin != end) {
-    value *= 10;
     auto val = *begin;
     if (val < '0' || val > '9') {
-      return false;
+      // found first non digit
+      break;
     }
+    value *= 10;
     value += (val - '0');
     begin++;
   }
   val = value;
-  return true;
+  return begin;
 }
 
 void loop() {
