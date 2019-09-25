@@ -6,25 +6,36 @@
  *   sequence is defined as (pos, delay) tuples
  */
 #include <Servo.h>
+#include <SoftwareSerial.h>
 
 #define DEBUG_LOG
 
 #ifdef DEBUG_LOG
-#define DEBUG_MSG(v) Serial.println(v)
-#define DEBUG_MSG1(v) Serial.print(v)
+#define DEBUG_MSG(v) debugSerial.println(v)
+#define DEBUG_MSG1(v) debugSerial.print(v)
 #else
 #define DEBUG_MSG(v)
 #define DEBUG_MSG1(v)
 #endif
 
-const int SERIAL_SPEED = 9600;
+// control serial from device
+const long SERIAL_SPEED = 9600;
+
+// pin where servo is attached
 const int SERVO_PIN = 5;
+
+// debug serial console where status messages are printed
+const long DEBUG_SERIAL_SPEED = 115200;
+const int SERIAL_TX = 3;
+const int SERIAL_RX = 2;
+
 
 const int low = 30;
 const int high = 135;
 const int mid = (high + low) / 2;
 
 Servo myservo;
+SoftwareSerial debugSerial(SERIAL_RX, SERIAL_TX);
 
 struct Stroke {
   int pos;
@@ -54,6 +65,7 @@ Stroke sequence[maxStrokes] = {
   {kEndOfList, 0}, // can't override that
 };
 
+
 void setup() {
   // servo pin 9
   myservo.attach(SERVO_PIN);
@@ -62,6 +74,7 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   // commands from serial
   Serial.begin(SERIAL_SPEED);
+  debugSerial.begin(DEBUG_SERIAL_SPEED);
   DEBUG_MSG(F("Start!"));
 }
 
@@ -74,11 +87,11 @@ size_t next = maxStrokes;
 bool defer = false;
 void startServo() {
   if (next != maxStrokes) {
-    DEBUG_MSG(F("Defer action"));
+    DEBUG_MSG(F("ACTION: Defer"));
     // prev run still active
     defer = true;
   } else {
-    DEBUG_MSG(F("Start action"));
+    DEBUG_MSG(F("ACTION: Start"));
     next = 0;
     // set update 1 ms in the past to trigger first run
     nextUpdate = millis() - 1;
@@ -89,11 +102,11 @@ void startServo() {
 void refreshServo() {
   if (next != maxStrokes && nextUpdate < millis()) {
     if (sequence[next].pos == kEndOfList) {
-      DEBUG_MSG(F("Finished action"));
+      DEBUG_MSG(F("ACTION: Finished"));
       // we reached end of list
       next = maxStrokes;
       if (defer) {
-        DEBUG_MSG(F("Start deferred sequence"));
+        DEBUG_MSG(F("ACTION: Deferred found"));
         // bell was enqueued while ringing, restart
         defer = false;
         startServo(); 
@@ -101,7 +114,7 @@ void refreshServo() {
         digitalWrite(LED_BUILTIN, LOW);
       }
     } else {
-      DEBUG_MSG1(F("Next step "));
+      DEBUG_MSG1(F("ACTION: Next step"));
       DEBUG_MSG(next);
       nextUpdate += sequence[next].delay;
       myservo.write(sequence[next].pos);
@@ -113,7 +126,7 @@ void refreshServo() {
 }
 
 void stopAction() {
-  DEBUG_MSG(F("Stop current action"));
+  DEBUG_MSG(F("ACTION: Stop"));
   next = maxStrokes;
   defer = false;
   myservo.write(mid);
@@ -126,31 +139,38 @@ void processSerial() {
   int inByte = Serial.read();
   switch (inByte) {
     case 0:
-      DEBUG_MSG(F("Reset frame"));
+      DEBUG_MSG(F("FRAME: Reset"));
       pos = 0;
       break;
     case '\n':
     case '\r':
-      DEBUG_MSG(F("Newline"));
+      DEBUG_MSG(F("FRAME: Finished"));
       if (pos == max_buffer) {
         // buffer reached limit so it was truncated so we should ignore
-        DEBUG_MSG(F("Buffer overflow"));
+        DEBUG_MSG(F("FRAME: Overflow"));
         pos = 0;
       }
       if (pos != 0) {
         switch(buffer[0]) {
           case '0':
-            stopAction();
+            if (pos==1) {
+              stopAction();
+            } else {
+              DEBUG_MSG(F("PARSER: Stop cmd has payload"));
+            }
             break;
           case '1':
             if (pos==1) {
               startServo();
             } else {
-              DEBUG_MSG(F("Start servo cmd has unrecognised payload"));
+              DEBUG_MSG(F("PARSER: Start cmd has payload"));
             }
             break;
           case '2':
             changeServo();
+            break;
+          default:
+            DEBUG_MSG(F("PARSER: Unknown command"));
             break;
         }
         // reset command buffer
@@ -158,7 +178,8 @@ void processSerial() {
       }
       break;
     default:
-      DEBUG_MSG(F("Newchar"));
+      // echo done with minimum overhead to avoid blocking normal calls
+      DEBUG_MSG(inByte);
       if (pos < max_buffer) {
         buffer[pos++] = inByte;
       }
@@ -173,11 +194,11 @@ void processSerial() {
 const int colon = 1;
 void changeServo() {
   if (pos != max_buffer) {
-    DEBUG_MSG(F("Wrong message size"));
+    DEBUG_MSG(F("PARSER: Wrong message size"));
     return;
   }
   if (buffer[colon] != ':') {
-    DEBUG_MSG(F("Failed to parse delimiters"));
+    DEBUG_MSG(F("PARSER: No colon"));
     return;
   }
   int index;
@@ -187,26 +208,26 @@ void changeServo() {
   auto end = buffer + pos;
   next = parseTo(next + 1, end, index);
   if (next == end || *next != ',') {
-    DEBUG_MSG(F("Failed to parse: no first comma"));
+    DEBUG_MSG(F("PARSER: no first comma"));
     return;
   }
   next = parseTo(next + 1, end, angle);
   if (next == end || *next != ',') {
-    DEBUG_MSG(F("Failed to parse: no second comma"));
+    DEBUG_MSG(F("PARSER: no second comma"));
     return;
   }
   next = parseTo(next + 1, end, delay);
   if (next != end) {
-    DEBUG_MSG(F("Failed to parse: extra chars"));
+    DEBUG_MSG(F("PARSER: extra chars"));
     return;
   }
   // -1 because we reserve last entry as terminator
   if (index >= maxStrokes-1) {
-    DEBUG_MSG(F("Validation: Index out of range"));
+    DEBUG_MSG(F("CHECK: Index out of range"));
     return;
   }
   if (angle > 180) {
-    DEBUG_MSG(F("Validation: Angle out of range"));
+    DEBUG_MSG(F("CHECK: Angle out of range"));
     return;
   }
   DEBUG_MSG1(F("New position: "));
