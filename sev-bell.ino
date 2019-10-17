@@ -23,6 +23,8 @@ const long SERIAL_SPEED = 9600;
 
 // pin where servo is attached
 const int SERVO_PIN = 5;
+// ping controlling servo power
+const int SERVO_POWER_PIN = 7;
 
 // debug serial console where status messages are printed
 const long DEBUG_SERIAL_SPEED = 115200;
@@ -67,6 +69,10 @@ Stroke sequence[maxStrokes] = {
 
 
 void setup() {
+  // turn servo power off until we init
+  // it should also float while uninitialized
+  pinMode(SERVO_POWER_PIN, OUTPUT);
+  digitalWrite(SERVO_POWER_PIN, HIGH);
   // servo pin 9
   myservo.attach(SERVO_PIN);
   myservo.write(mid);
@@ -76,6 +82,8 @@ void setup() {
   Serial.begin(SERIAL_SPEED);
   debugSerial.begin(DEBUG_SERIAL_SPEED);
   DEBUG_MSG(F("Start!"));
+  // enable servo power
+  digitalWrite(SERVO_POWER_PIN, LOW);
 }
 
 // time in millis when next servo angle is applied
